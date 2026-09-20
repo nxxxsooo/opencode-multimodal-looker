@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="opencode-vision-router" width="160" />
+  <img src="./assets/logo.svg" alt="opencode-multimodal-looker" width="160" />
 </p>
 
-<h1 align="center">opencode-vision-router</h1>
+<h1 align="center">opencode-multimodal-looker</h1>
 
 <p align="center">
   Route pasted images to a cheap vision model in <a href="https://opencode.ai">opencode</a> so a
@@ -10,12 +10,17 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/opencode-vision-router"><img src="https://img.shields.io/npm/v/opencode-vision-router.svg" alt="npm version" /></a>
-  <a href="https://www.npmjs.com/package/opencode-vision-router"><img src="https://img.shields.io/npm/l/opencode-vision-router.svg" alt="license" /></a>
-  <a href="https://www.npmjs.com/package/opencode-vision-router"><img src="https://img.shields.io/npm/types/opencode-vision-router.svg" alt="types" /></a>
-  <a href="https://www.npmjs.com/package/opencode-vision-router"><img src="https://img.shields.io/npm/dm/opencode-vision-router.svg" alt="downloads" /></a>
   <img src="https://img.shields.io/badge/runtime-bun-000000.svg" alt="bun" />
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license" />
+  <img src="https://img.shields.io/badge/opencode-2.0.10-informational.svg" alt="opencode" />
 </p>
+
+---
+
+> **Origin.** This is a self-maintained rename of
+> [`Chathula/opencode-vision-router`](https://github.com/Chathula/opencode-vision-router)
+> (MIT), taken at upstream `0.2.0`. It is not published to npm and is loaded by
+> directory path. Changes are not sent upstream; see [Divergence](#-divergence-from-upstream).
 
 ---
 
@@ -24,7 +29,7 @@ on it _before_ any skill or subagent runs. A skill alone cannot fix this. The on
 **plugin hook** that intercepts the image at the harness level, resolves it to a readable path, and
 lets a cheap vision model analyze it.
 
-`opencode-vision-router` is a self-contained, zero-config plugin that does exactly that — and injects
+`opencode-multimodal-looker` is a self-contained, zero-config plugin that does exactly that — and injects
 the vision subagent for you, so there are **no separate agent or skill files** to manage.
 
 ## ✨ Features
@@ -62,26 +67,33 @@ opencode version supports:
 
 Add it to your `opencode.json(c)` and restart opencode — plugins are not hot-reloaded.
 
-**OpenCode 2** uses the `plugins` key with a package/options object:
+This package is not on npm. Clone it, build it once, and point `plugin` at the
+directory:
 
-```json
-{
-  "plugins": [
-    { "package": "opencode-vision-router", "options": { "model": "opencode-go/qwen3.7-plus" } }
-  ]
-}
+```bash
+git clone <this repo> ~/path/to/opencode-multimodal-looker
+cd ~/path/to/opencode-multimodal-looker && bun install && bun run build
 ```
 
-**OpenCode 1** uses the `plugin` key with a package/options tuple
-(OpenCode `1.18.29` or newer is required for the object-form entrypoint this plugin ships):
-
-```json
+```jsonc
 {
   "plugin": [
-    ["opencode-vision-router", { "model": "opencode-go/qwen3.7-plus" }]
+    [
+      "/absolute/path/to/opencode-multimodal-looker",
+      { "model": "alibaba-coding-plan/qwen3.7-plus" }
+    ]
   ]
 }
 ```
+
+Then restart opencode — plugins are not hot-reloaded.
+
+> ⚠️ The config key is `plugin` with a `[path, options]` tuple. Upstream's README
+> documents a `plugins` key with `{ package, options }` objects for OpenCode 2, but
+> the `https://opencode.ai/config.json` schema shipped with opencode `2.0.10` only
+> accepts `plugin`, whose items are `string | [string, object]`. The path must be a
+> **directory** containing `package.json`; pointing at a file is rejected with
+> `configured plugin path must be a directory`.
 
 ## ⚙️ Configuration
 
@@ -96,50 +108,44 @@ Add it to your `opencode.json(c)` and restart opencode — plugins are not hot-r
 
 ### Basic
 
-OpenCode 2:
-
-```json
-{
-  "plugins": [
-    { "package": "opencode-vision-router", "options": { "model": "opencode-go/qwen3.7-plus" } }
-  ]
-}
-```
-
-OpenCode 1 (>= 1.18.29):
-
-```json
+```jsonc
 {
   "plugin": [
-    ["opencode-vision-router", { "model": "opencode-go/qwen3.7-plus" }]
+    [
+      "/Users/you/Tuning/opencode-multimodal-looker",
+      { "model": "alibaba-coding-plan/qwen3.7-plus" }
+    ]
   ]
 }
 ```
 
-### Multiple plugins
+### Alongside other plugins
 
-```json
+```jsonc
 {
-  "plugins": [
-    "@dodopayments/opencode-plugin",
-    { "package": "opencode-vision-router", "options": { "model": "opencode-go/qwen3.7-plus" } }
+  "plugin": [
+    "opencode-metrics@0.7.0",
+    [
+      "/Users/you/Tuning/opencode-multimodal-looker",
+      { "model": "alibaba-coding-plan/qwen3.7-plus" }
+    ]
   ]
 }
 ```
 
 ### Custom subagent name and cache directory
 
-```json
+```jsonc
 {
-  "plugins": [
-    {
-      "package": "opencode-vision-router",
-      "options": {
-        "model": "anthropic/claude-3-5-haiku",
+  "plugin": [
+    [
+      "/Users/you/Tuning/opencode-multimodal-looker",
+      {
+        "model": "alibaba-coding-plan/qwen3.7-plus",
         "agent": "image-reader",
         "tmpDir": "/var/tmp/opencode-vision"
       }
-    }
+    ]
   ]
 }
 ```
@@ -150,20 +156,20 @@ If your main model can already see images, routing is skipped by default. Set `f
 to always route — e.g. to send images to a *cheaper* vision model while keeping a stronger
 text model as main:
 
-```json
+```jsonc
 {
-  "plugins": [
-    {
-      "package": "opencode-vision-router",
-      "options": { "model": "openai/gpt-4o-mini", "force": true }
-    }
+  "plugin": [
+    [
+      "/Users/you/Tuning/opencode-multimodal-looker",
+      { "model": "alibaba-coding-plan/qwen3.7-plus", "force": true }
+    ]
   ]
 }
 ```
 
 ### Consuming the plugin
 
-`opencode-vision-router` is an opencode plugin and is wired up only through your `opencode.json`
+`opencode-multimodal-looker` is an opencode plugin and is wired up only through your `opencode.json`
 (see Installation / Configuration above). Its helper functions (`image.ts`, `transform.ts`,
 `agent.ts`) are plain, dependency-free implementation details used by the plugin itself and
 covered by the test suite — they are intentionally **not** part of the package's public API, so
@@ -215,24 +221,41 @@ src/
   index.test.ts   # Bun tests
 ```
 
-## 🤝 Contributing
+## 🔀 Divergence from upstream
 
-Contributions welcome! This is a small, single-purpose plugin, so the bar for patches is low.
+Taken at `Chathula/opencode-vision-router@0.2.0`. Changes since:
 
-1. Fork the repo and create a branch: `git checkout -b fix/my-change`.
-2. Install deps and run the checks: `bun install && bun test && bunx tsc --noEmit`.
-3. Add tests for any new behavior.
-4. Keep the plugin self-contained — prefer extending the injected subagent over adding new files
-   users must wire up.
-5. Open a PR with a clear description of the problem and the fix.
+- **Fixed: `force: false` never skipped a multimodal main model.** The V2 capability
+  probe called `ctx.catalog.model.list()`. `@opencode/plugin` exposed the catalog at
+  `ctx.catalog.model` up to `2.0.3` but renamed it to `ctx.model` by `2.0.10`, so on
+  current opencode the call threw a `TypeError` that a bare `catch { return false }`
+  turned into "this model cannot see images" — every model, always. Result: images
+  were routed to the vision subagent even when the main model had native vision.
+  Now reads `ctx.model` with a fallback to `ctx.catalog.model`, tolerates both a bare
+  array and `{ data }` from `list()`, and logs the reason when the lookup genuinely
+  fails instead of failing silently.
+- **Regression tests for the V2 capability path** (`OpenCode V2 capability detection`),
+  which upstream had none of — hence the shipped bug.
+- Renamed to `opencode-multimodal-looker`; `dist/` is tracked because the plugin is
+  loaded by directory path; npm publishing and its release workflow were removed.
 
-Please file issues for bugs, hook-contract changes in opencode, or model-compatibility reports.
+## 🧰 Maintenance
 
-## 🚀 Releasing
+```bash
+bun install
+bun test            # includes the capability-detection regression tests
+bunx tsc --noEmit
+bun run build       # rebuild dist/ — required after any src change
+```
 
-Publishing, OIDC/Trusted-Publisher setup, and the build→`dist/` flow are documented in
-[`release.md`](./release.md).
+Rebuild `dist/` and restart opencode after changing `src/`; plugins are not hot-reloaded.
+
+To check what upstream has done since the fork:
+
+```bash
+git fetch upstream && git log --oneline HEAD..upstream/main
+```
 
 ## 📜 License
 
-[MIT](./LICENSE) © opencode-vision-router contributors.
+[MIT](./LICENSE) © opencode-multimodal-looker contributors.

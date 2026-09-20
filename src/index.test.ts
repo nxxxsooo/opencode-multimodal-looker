@@ -341,10 +341,110 @@ describe("OpenCode V2 agent injection", () => {
   });
 });
 
+describe("OpenCode V2 capability detection", () => {
+  const CATALOG = [
+    {
+      providerID: "anthropic",
+      modelID: "claude-opus-5",
+      capabilities: { tools: true, input: ["text", "image", "pdf"], output: ["text"] },
+    },
+    {
+      providerID: "codem",
+      modelID: "auto",
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+    },
+  ];
+
+  /** Minimal V2 Context double; captures the registered `context` session hook. */
+  function makeCtx(options: any, listed: unknown) {
+    let hook: ((event: any) => Promise<void>) | undefined;
+    return {
+      ctx: {
+        options,
+        model: { list: async () => listed },
+        agent: { transform: async (fn: any) => fn({ update: () => {} }) },
+        session: {
+          hook: async (name: string, fn: any) => {
+            if (name === "context") hook = fn;
+          },
+        },
+      },
+      run: async (event: any) => {
+        await hook!(event);
+        return event;
+      },
+    };
+  }
+
+  function imageEvent(providerID: string, id: string) {
+    return {
+      agent: "build",
+      model: { providerID, id },
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "media", mediaType: "image/png", data: "AAAA" }],
+        },
+      ],
+    };
+  }
+
+  const opts = { model: "alibaba-coding-plan/qwen3.7-plus" };
+
+  it("should read capabilities from ctx.model, not a non-existent ctx.catalog", async () => {
+    const { ctx, run } = makeCtx(opts, { data: CATALOG });
+    await (plugin as any).setup(ctx);
+    // Multimodal main model -> the image must survive untouched.
+    const event = await run(imageEvent("anthropic", "claude-opus-5"));
+    expect(event.messages[0].content[0].type).toBe("media");
+  });
+
+  it("should still route for a text-only main model", async () => {
+    const { ctx, run } = makeCtx(opts, { data: CATALOG });
+    await (plugin as any).setup(ctx);
+    const event = await run(imageEvent("codem", "auto"));
+    expect(event.messages[0].content[0].type).toBe("text");
+    expect(event.messages[0].content[0].text).toContain("subagent");
+  });
+
+  it("should accept a bare array from ctx.model.list()", async () => {
+    const { ctx, run } = makeCtx(opts, CATALOG);
+    await (plugin as any).setup(ctx);
+    const event = await run(imageEvent("anthropic", "claude-opus-5"));
+    expect(event.messages[0].content[0].type).toBe("media");
+  });
+
+  it("should fall back to the pre-2.0.10 ctx.catalog.model shape", async () => {
+    const { ctx, run } = makeCtx(opts, { data: CATALOG });
+    (ctx as any).catalog = { model: (ctx as any).model };
+    delete (ctx as any).model;
+    await (plugin as any).setup(ctx);
+    const event = await run(imageEvent("anthropic", "claude-opus-5"));
+    expect(event.messages[0].content[0].type).toBe("media");
+  });
+
+  it("should route on a multimodal main model when force is set", async () => {
+    const { ctx, run } = makeCtx({ ...opts, force: true }, { data: CATALOG });
+    await (plugin as any).setup(ctx);
+    const event = await run(imageEvent("anthropic", "claude-opus-5"));
+    expect(event.messages[0].content[0].type).toBe("text");
+  });
+
+  it("should fail open (route) when the catalog lookup throws", async () => {
+    const { ctx, run } = makeCtx(opts, undefined);
+    (ctx as any).model.list = async () => {
+      throw new Error("boom");
+    };
+    await (plugin as any).setup(ctx);
+    const event = await run(imageEvent("anthropic", "claude-opus-5"));
+    expect(event.messages[0].content[0].type).toBe("text");
+  });
+});
+
 describe("dual V1/V2 default export", () => {
   it("should expose a V2 definition (id + setup) and a V1 server() function", () => {
     expect(typeof (plugin as any).id).toBe("string");
-    expect((plugin as any).id).toBe("opencode-vision-router");
+    expect((plugin as any).id).toBe("opencode-multimodal-looker");
     expect(typeof (plugin as any).setup).toBe("function");
     expect(typeof (plugin as any).server).toBe("function");
   });

@@ -1,7 +1,9 @@
 name: CI
 
-# Validate packaging and tests on every PR without consuming an npm version.
+# Self-maintained plugin: verify tests, types, and that dist/ is committed in sync
+# with src/. Nothing is published to npm.
 on:
+  push:
   pull_request:
   workflow_dispatch:
 
@@ -30,5 +32,5 @@ jobs:
       - name: Build to dist/
         run: bun run build
 
-      - name: Validate package (dry run — does NOT publish or consume a version)
-        run: npm publish --dry-run --access public
+      - name: Fail if committed dist/ is stale
+        run: git diff --exit-code -- dist/

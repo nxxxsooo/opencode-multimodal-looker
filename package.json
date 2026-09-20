@@ -1,7 +1,7 @@
 {
-  "name": "opencode-vision-router",
-  "version": "0.2.0",
-  "description": "Route pasted images to a cheap vision model in opencode so text-only main agents work from its text output.",
+  "name": "opencode-multimodal-looker",
+  "version": "0.3.0",
+  "description": "Let a text-only opencode main agent look at images by routing them to a vision model and working from its text output.",
   "type": "module",
   "main": "dist/index.js",
   "exports": "./dist/index.js",
@@ -10,11 +10,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Chathula/opencode-vision-router.git"
+    "url": "git+https://github.com/nxxxsooo/opencode-multimodal-looker.git"
   },
-  "homepage": "https://github.com/Chathula/opencode-vision-router#readme",
+  "homepage": "https://github.com/nxxxsooo/opencode-multimodal-looker#readme",
   "bugs": {
-    "url": "https://github.com/Chathula/opencode-vision-router/issues"
+    "url": "https://github.com/nxxxsooo/opencode-multimodal-looker/issues"
   },
   "scripts": {
     "test": "bun test",

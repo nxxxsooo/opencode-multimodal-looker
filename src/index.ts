@@ -11,7 +11,7 @@ import { resolveImagePath } from "./image";
 import type { Msg, Opts } from "./types";
 
 /**
- * opencode-vision-router
+ * opencode-multimodal-looker
  *
  * A third-party opencode plugin that routes pasted images to a cheap vision model
  * so a text-only main agent can work from the vision model's text output.
@@ -30,7 +30,7 @@ import type { Msg, Opts } from "./types";
  * - V2 validates the export's `id` + `setup()` and runs the V2 implementation.
  */
 
-const PLUGIN_ID = "opencode-vision-router";
+const PLUGIN_ID = "opencode-multimodal-looker";
 
 /** Shared option parsing + the image-pointer instruction. */
 function parseOptions(options: Record<string, unknown> | undefined) {
@@ -45,7 +45,7 @@ function parseOptions(options: Record<string, unknown> | undefined) {
 }
 
 const NO_MODEL_WARNING =
-  "[opencode-vision-router] no `model` option set; vision routing disabled.";
+  "[opencode-multimodal-looker] no `model` option set; vision routing disabled.";
 
 // ---------------------------------------------------------------------------
 // V1 implementation (unchanged behavior)
@@ -133,8 +133,19 @@ const v2Plugin = Plugin.define({
       const cached = capabilities.get(key);
       if (cached !== undefined) return cached;
       try {
-        const { data } = await ctx.catalog.model.list();
-        const model = (data as any[]).find(
+        // @opencode/plugin exposed the catalog as `ctx.catalog.model` up to 2.0.3
+        // and renamed it to `ctx.model` by 2.0.10. Reading only the old path threw
+        // a TypeError on current opencode, which the catch below turned into
+        // "not multimodal" — so every model looked text-only and `force: false`
+        // never skipped anything. Support both shapes.
+        const catalog =
+          (ctx as any).model ?? (ctx as any).catalog?.model;
+        if (!catalog?.list) throw new Error("no model catalog on plugin context");
+        const listed = await catalog.list();
+        const data: any[] = Array.isArray(listed)
+          ? listed
+          : ((listed as any)?.data ?? []);
+        const model = data.find(
           (m) => m.providerID === providerID && (m.modelID ?? m.id) === modelID,
         );
         const img =
@@ -142,7 +153,12 @@ const v2Plugin = Plugin.define({
           model.capabilities.input.includes("image");
         capabilities.set(key, img);
         return img;
-      } catch {
+      } catch (err) {
+        // Fail open (route), but make the reason visible instead of silent.
+        console.warn(
+          `[${PLUGIN_ID}] capability lookup failed for ${key}; routing anyway:`,
+          err,
+        );
         return false;
       }
     };

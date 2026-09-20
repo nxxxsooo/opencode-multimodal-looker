@@ -2,5 +2,8 @@ node_modules/
 *.log
 .DS_Store
 .env
-dist/
 coverage/
+
+# dist/ is intentionally tracked: opencode loads this plugin by directory path
+# and resolves package.json "main", so the built entrypoint must exist in a
+# fresh clone without a build step.

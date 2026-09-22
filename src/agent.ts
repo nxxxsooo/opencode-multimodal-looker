@@ -1,6 +1,20 @@
 import type { Config } from "@opencode-ai/plugin";
 import type { Opts } from "./types";
 
+/**
+ * Parse a `provider/model` reference. The provider ends at the first `/`; the
+ * model may itself contain `/` (e.g. `openrouter/anthropic/claude-fable-5.1`).
+ * Returns null when malformed.
+ */
+export function parseModelRef(
+  model: string | undefined,
+): { providerID: string; modelID: string } | null {
+  if (!model) return null;
+  const idx = model.indexOf("/");
+  if (idx <= 0 || idx === model.length - 1) return null;
+  return { providerID: model.slice(0, idx), modelID: model.slice(idx + 1) };
+}
+
 /** Build the config object for the injected vision subagent. */
 export function buildVisionAgentConfig(opts: Opts): Record<string, any> {
   const agentName = opts.agent || "vision";
@@ -27,11 +41,10 @@ export function buildVisionAgentConfig(opts: Opts): Record<string, any> {
  * (b) inject the vision subagent. No-op if `opts.model` is missing or malformed.
  */
 export function applyConfig(cfg: Config, opts: Opts): void {
-  const model = opts.model;
-  if (!model) return;
-  const [provider, modelId] = model.split("/");
-  if (!provider || !modelId) return;
+  const ref = parseModelRef(opts.model);
+  if (!ref) return;
 
+  const [provider, modelId] = [ref.providerID, ref.modelID];
   cfg.provider = cfg.provider || {};
   cfg.provider[provider] = cfg.provider[provider] || { models: {} };
   cfg.provider[provider].models = cfg.provider[provider].models || {};
@@ -57,22 +70,23 @@ export function delegationInstruction(agentName: string): string {
 /**
  * OpenCode V2: upsert the vision subagent through an `agent.transform` editor.
  * V2 has no mutable global config hook, so the agent is registered directly
- * with the agent domain (editor.update creates missing agents).
+ * with the agent domain (editor.update creates missing agents). `model`
+ * overrides `opts.model` — used by the fallback chain to re-point the agent at
+ * another vision model after a quota failure.
  */
 export function applyAgent(
   editor: { update(id: string, update: (agent: any) => void): void },
   opts: Opts,
+  model?: string,
 ): void {
-  const model = opts.model;
-  if (!model) return;
-  const [providerID, modelID] = model.split("/");
-  if (!providerID || !modelID) return;
+  const ref = parseModelRef(model ?? opts.model);
+  if (!ref) return;
   const agentName = opts.agent || "vision";
   editor.update(agentName, (agent) => {
     agent.name = agentName;
     agent.description = buildVisionAgentConfig(opts).description;
     agent.mode = "subagent";
-    agent.model = { providerID, id: modelID };
+    agent.model = { providerID: ref.providerID, id: ref.modelID };
     agent.system = buildVisionAgentConfig(opts).prompt;
     agent.permissions = [
       { action: "external_directory", resource: "*", effect: "allow" },

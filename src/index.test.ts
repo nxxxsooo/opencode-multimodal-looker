@@ -5,7 +5,8 @@ import { join } from "node:path";
 
 import { resolveImagePath, resolveMediaPath, decodeDataUrl, extForMime } from "./image";
 import { transformMessages, transformV2Messages, imagePointer } from "./transform";
-import { applyConfig, applyAgent, buildVisionAgentConfig, delegationInstruction } from "./agent";
+import { applyConfig, applyAgent, buildVisionAgentConfig, delegationInstruction, parseModelRef } from "./agent";
+import { isQuotaError, buildModelChain } from "./fallback";
 import type { Config } from "@opencode-ai/plugin";
 import plugin from "./index";
 
@@ -438,6 +439,160 @@ describe("OpenCode V2 capability detection", () => {
     await (plugin as any).setup(ctx);
     const event = await run(imageEvent("anthropic", "claude-opus-5"));
     expect(event.messages[0].content[0].type).toBe("text");
+  });
+});
+
+describe("vision model fallback chain", () => {
+  it("parseModelRef should handle plain and nested model refs", () => {
+    expect(parseModelRef("alibaba-coding-plan/qwen3.7-plus")).toEqual({
+      providerID: "alibaba-coding-plan",
+      modelID: "qwen3.7-plus",
+    });
+    expect(parseModelRef("openrouter/anthropic/claude-fable-5.1")).toEqual({
+      providerID: "openrouter",
+      modelID: "anthropic/claude-fable-5.1",
+    });
+    expect(parseModelRef("noprovider")).toBeNull();
+    expect(parseModelRef("provider/")).toBeNull();
+    expect(parseModelRef(undefined)).toBeNull();
+  });
+
+  it("isQuotaError should match 429s and quota-ish messages", () => {
+    expect(isQuotaError({ status: 429, message: "anything" })).toBe(true);
+    expect(
+      isQuotaError({
+        status: 503,
+        message: "concurrency allocated quota exceeded. please try again later.",
+      }),
+    ).toBe(true);
+    expect(isQuotaError({ message: "rate limit exceeded" })).toBe(true);
+    expect(isQuotaError({ type: "too_many_requests" })).toBe(true);
+    expect(isQuotaError({ status: 400, message: "invalid request" })).toBe(false);
+    expect(isQuotaError(undefined)).toBe(false);
+  });
+
+  it("buildModelChain should keep order, drop malformed entries, dedupe", () => {
+    expect(
+      buildModelChain("p/primary", ["p/backup", "bad", "p/primary", "p/last"]),
+    ).toEqual(["p/primary", "p/backup", "p/last"]);
+    expect(buildModelChain(undefined, ["p/backup"])).toEqual(["p/backup"]);
+    expect(buildModelChain("p/primary")).toEqual(["p/primary"]);
+    expect(buildModelChain(undefined, ["bad"])).toEqual([]);
+  });
+
+  it("applyAgent should honor the model override", () => {
+    const agents: any = {};
+    applyAgent(
+      {
+        update: (id: string, update: (a: any) => void) => {
+          const a: any = {};
+          update(a);
+          agents[id] = a;
+        },
+      },
+      { model: "p/primary", agent: "vision" },
+      "p/backup",
+    );
+    expect(agents["vision"].model).toEqual({ providerID: "p", id: "backup" });
+  });
+
+  /**
+   * V2 Context double that captures the `retry` session hook, records agent
+   * transforms and session model switches.
+   */
+  function makeFallbackCtx(options: any) {
+    let retryHook: ((event: any) => Promise<void>) | undefined;
+    const appliedModels: string[] = [];
+    const switches: any[] = [];
+    const ctx = {
+      options,
+      model: { list: async () => ({ data: [] }) },
+      agent: {
+        transform: async (fn: any) => {
+          fn({
+            update: (_id: string, update: (a: any) => void) => {
+              const a: any = {};
+              update(a);
+              appliedModels.push(a.model?.providerID + "/" + a.model?.id);
+            },
+          });
+        },
+      },
+      session: {
+        hook: async (name: string, fn: any) => {
+          if (name === "retry") retryHook = fn;
+        },
+        switchModel: async (input: any) => {
+          switches.push(input);
+        },
+      },
+    };
+    return {
+      ctx,
+      appliedModels,
+      switches,
+      retry: async (event: any) => {
+        await retryHook!(event);
+        return event;
+      },
+    };
+  }
+
+  const quotaEvent = (agent: string, attempt = 1) => ({
+    sessionID: "ses-1",
+    agent,
+    model: { providerID: "p", id: "primary" },
+    error: { status: 429, message: "concurrency allocated quota exceeded" },
+    attempt,
+    decision: { retry: false },
+  });
+
+  it("should fail the vision subagent over on quota errors and retry", async () => {
+    const { ctx, appliedModels, switches, retry } = makeFallbackCtx({
+      model: "p/primary",
+      fallbackModels: ["p/backup", "bad", "p/last"],
+    });
+    const cleanup = await (plugin as any).setup(ctx);
+    expect(appliedModels).toEqual(["p/primary"]); // initial injection
+
+    const event = await retry(quotaEvent("vision"));
+    expect(event.decision).toEqual({ retry: true, delay: 0 });
+    expect(appliedModels[appliedModels.length - 1]).toBe("p/backup");
+    expect(switches).toEqual([
+      { sessionID: "ses-1", model: { providerID: "p", id: "backup" } },
+    ]);
+
+    // Non-quota errors and other agents must not fail over.
+    const other = await retry({ ...quotaEvent("build"), error: { status: 400, message: "bad" } });
+    expect(other.decision).toEqual({ retry: false });
+    const badAgent = await retry(quotaEvent("build"));
+    expect(badAgent.decision).toEqual({ retry: false });
+    expect(switches).toHaveLength(1);
+
+    // Walks the chain one entry per quota failure, then stops at the end.
+    await retry(quotaEvent("vision"));
+    expect(appliedModels[appliedModels.length - 1]).toBe("p/last");
+    const exhausted = await retry(quotaEvent("vision"));
+    expect(exhausted.decision).toEqual({ retry: false }); // chain exhausted
+    expect(switches).toHaveLength(2);
+
+    if (typeof cleanup === "function") cleanup();
+  });
+
+  it("should not register a retry hook without fallbacks", async () => {
+    let retryHook: any;
+    const ctx: any = {
+      options: { model: "p/primary" },
+      model: { list: async () => ({ data: [] }) },
+      agent: { transform: async (fn: any) => fn({ update: () => {} }) },
+      session: {
+        hook: async (name: string, fn: any) => {
+          if (name === "retry") retryHook = fn;
+        },
+      },
+    };
+    await (plugin as any).setup(ctx);
+    expect(retryHook).toBeUndefined();
   });
 });
 

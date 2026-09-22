@@ -8,6 +8,8 @@ import {
   transformV2Messages,
 } from "./transform";
 import { resolveImagePath } from "./image";
+import { isQuotaError, buildModelChain } from "./fallback";
+import { parseModelRef } from "./agent";
 import type { Msg, Opts } from "./types";
 
 /**
@@ -163,11 +165,80 @@ const v2Plugin = Plugin.define({
       }
     };
 
-    if (hasModel) {
-      // Inject the vision subagent (agent.update upserts missing agents).
+    // Ordered vision-model chain with quota failover (V2 only). Without
+    // `fallbackModels` the chain is just the primary and behavior is unchanged.
+    const chain = hasModel ? buildModelChain(opts.model, opts.fallbackModels) : [];
+    const resetMs =
+      typeof opts.fallbackResetMs === "number"
+        ? opts.fallbackResetMs
+        : 30 * 60_000;
+    let chainIndex = 0;
+    let resetTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const setAgentModel = async (model: string) => {
       await ctx.agent.transform((editor) => {
-        applyAgent(editor as any, opts);
+        applyAgent(editor as any, opts, model);
       });
+    };
+
+    if (hasModel) {
+      // After the reset window, try the primary again so a recovered quota is
+      // picked up; if it is still saturated the retry hook fails over again.
+      const scheduleReset = () => {
+        if (resetTimer) clearTimeout(resetTimer);
+        if (!(resetMs > 0) || chain.length < 2) return;
+        resetTimer = setTimeout(() => {
+          resetTimer = undefined;
+          chainIndex = 0;
+          void setAgentModel(chain[0]).then(
+            () =>
+              console.warn(
+                `[${PLUGIN_ID}] vision model reset to primary ${chain[0]}`,
+              ),
+            (err: unknown) =>
+              console.warn(`[${PLUGIN_ID}] vision model reset failed:`, err),
+          );
+        }, resetMs);
+        resetTimer.unref?.();
+      };
+
+      // Inject the vision subagent (agent.update upserts missing agents).
+      await setAgentModel(chain[chainIndex]);
+
+      // Fail the vision subagent over to the next model on quota/rate-limit
+      // errors: switch the child session and the agent registry, then retry
+      // immediately. If the in-flight retry keeps the old model, the next
+      // delegation still lands on the fallback.
+      if (chain.length > 1) {
+        await ctx.session.hook("retry", async (event: any) => {
+          if (event.agent !== agentName) return;
+          if (!isQuotaError(event.error)) return;
+          if (chainIndex >= chain.length - 1) return; // chain exhausted
+          const from = chain[chainIndex];
+          chainIndex += 1;
+          const next = chain[chainIndex];
+          const ref = parseModelRef(next)!;
+          try {
+            await ctx.session.switchModel({
+              sessionID: event.sessionID,
+              model: { providerID: ref.providerID, id: ref.modelID },
+            });
+          } catch (err) {
+            console.warn(`[${PLUGIN_ID}] session model switch failed:`, err);
+          }
+          try {
+            await setAgentModel(next);
+          } catch (err) {
+            console.warn(`[${PLUGIN_ID}] agent model switch failed:`, err);
+          }
+          console.warn(
+            `[${PLUGIN_ID}] vision model ${from} hit a quota/rate limit; ` +
+              `switched vision subagent to ${next}`,
+          );
+          scheduleReset();
+          event.decision = { retry: true, delay: 0 };
+        });
+      }
     }
 
     // Rewrite image media parts on user messages immediately before each
@@ -189,6 +260,11 @@ const v2Plugin = Plugin.define({
         tmpDir,
       );
     });
+
+    // setup() cleanup: drop the pending back-to-primary timer on unload.
+    return () => {
+      if (resetTimer) clearTimeout(resetTimer);
+    };
   },
 });
 

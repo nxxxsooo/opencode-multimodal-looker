@@ -2,6 +2,14 @@
 import { Plugin } from "@opencode/plugin";
 
 // src/agent.ts
+function parseModelRef(model) {
+  if (!model)
+    return null;
+  const idx = model.indexOf("/");
+  if (idx <= 0 || idx === model.length - 1)
+    return null;
+  return { providerID: model.slice(0, idx), modelID: model.slice(idx + 1) };
+}
 function buildVisionAgentConfig(opts) {
   const agentName = opts.agent || "vision";
   return {
@@ -19,12 +27,10 @@ function buildVisionAgentConfig(opts) {
   };
 }
 function applyConfig(cfg, opts) {
-  const model = opts.model;
-  if (!model)
+  const ref = parseModelRef(opts.model);
+  if (!ref)
     return;
-  const [provider, modelId] = model.split("/");
-  if (!provider || !modelId)
-    return;
+  const [provider, modelId] = [ref.providerID, ref.modelID];
   cfg.provider = cfg.provider || {};
   cfg.provider[provider] = cfg.provider[provider] || { models: {} };
   cfg.provider[provider].models = cfg.provider[provider].models || {};
@@ -37,19 +43,16 @@ function applyConfig(cfg, opts) {
   cfg.agent = cfg.agent || {};
   cfg.agent[opts.agent || "vision"] = buildVisionAgentConfig(opts);
 }
-function applyAgent(editor, opts) {
-  const model = opts.model;
-  if (!model)
-    return;
-  const [providerID, modelID] = model.split("/");
-  if (!providerID || !modelID)
+function applyAgent(editor, opts, model) {
+  const ref = parseModelRef(model ?? opts.model);
+  if (!ref)
     return;
   const agentName = opts.agent || "vision";
   editor.update(agentName, (agent) => {
     agent.name = agentName;
     agent.description = buildVisionAgentConfig(opts).description;
     agent.mode = "subagent";
-    agent.model = { providerID, id: modelID };
+    agent.model = { providerID: ref.providerID, id: ref.modelID };
     agent.system = buildVisionAgentConfig(opts).prompt;
     agent.permissions = [
       { action: "external_directory", resource: "*", effect: "allow" },
@@ -197,6 +200,33 @@ function transformV2Messages(messages, agentName, tmpDir) {
   });
 }
 
+// src/fallback.ts
+var QUOTA_RE = /quota|concurrency|rate[\s_.-]?limit|too[\s_.-]?many[\s_.-]?requests/i;
+function isQuotaError(error) {
+  if (!error)
+    return false;
+  if (error.status === 429)
+    return true;
+  const text = `${error.type ?? ""} ${error.message ?? ""}`;
+  return QUOTA_RE.test(text);
+}
+function buildModelChain(model, fallbackModels) {
+  const chain = [];
+  const push = (m) => {
+    if (typeof m !== "string")
+      return;
+    const trimmed = m.trim();
+    if (!trimmed || !parseModelRef(trimmed))
+      return;
+    if (!chain.includes(trimmed))
+      chain.push(trimmed);
+  };
+  push(model);
+  if (Array.isArray(fallbackModels))
+    fallbackModels.forEach(push);
+  return chain;
+}
+
 // src/index.ts
 var PLUGIN_ID = "opencode-multimodal-looker";
 function parseOptions(options) {
@@ -284,10 +314,59 @@ var v2Plugin = Plugin.define({
         return false;
       }
     };
-    if (hasModel) {
+    const chain = hasModel ? buildModelChain(opts.model, opts.fallbackModels) : [];
+    const resetMs = typeof opts.fallbackResetMs === "number" ? opts.fallbackResetMs : 30 * 60000;
+    let chainIndex = 0;
+    let resetTimer;
+    const setAgentModel = async (model) => {
       await ctx.agent.transform((editor) => {
-        applyAgent(editor, opts);
+        applyAgent(editor, opts, model);
       });
+    };
+    if (hasModel) {
+      const scheduleReset = () => {
+        if (resetTimer)
+          clearTimeout(resetTimer);
+        if (!(resetMs > 0) || chain.length < 2)
+          return;
+        resetTimer = setTimeout(() => {
+          resetTimer = undefined;
+          chainIndex = 0;
+          setAgentModel(chain[0]).then(() => console.warn(`[${PLUGIN_ID}] vision model reset to primary ${chain[0]}`), (err) => console.warn(`[${PLUGIN_ID}] vision model reset failed:`, err));
+        }, resetMs);
+        resetTimer.unref?.();
+      };
+      await setAgentModel(chain[chainIndex]);
+      if (chain.length > 1) {
+        await ctx.session.hook("retry", async (event) => {
+          if (event.agent !== agentName)
+            return;
+          if (!isQuotaError(event.error))
+            return;
+          if (chainIndex >= chain.length - 1)
+            return;
+          const from = chain[chainIndex];
+          chainIndex += 1;
+          const next = chain[chainIndex];
+          const ref = parseModelRef(next);
+          try {
+            await ctx.session.switchModel({
+              sessionID: event.sessionID,
+              model: { providerID: ref.providerID, id: ref.modelID }
+            });
+          } catch (err) {
+            console.warn(`[${PLUGIN_ID}] session model switch failed:`, err);
+          }
+          try {
+            await setAgentModel(next);
+          } catch (err) {
+            console.warn(`[${PLUGIN_ID}] agent model switch failed:`, err);
+          }
+          console.warn(`[${PLUGIN_ID}] vision model ${from} hit a quota/rate limit; ` + `switched vision subagent to ${next}`);
+          scheduleReset();
+          event.decision = { retry: true, delay: 0 };
+        });
+      }
     }
     await ctx.session.hook("context", async (event) => {
       if (!hasModel)
@@ -299,6 +378,10 @@ var v2Plugin = Plugin.define({
         return;
       event.messages = transformV2Messages(event.messages, agentName, tmpDir);
     });
+    return () => {
+      if (resetTimer)
+        clearTimeout(resetTimer);
+    };
   }
 });
 var src_default = {

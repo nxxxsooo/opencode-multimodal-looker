@@ -100,6 +100,8 @@ Then restart opencode — plugins are not hot-reloaded.
 | Option   | Required | Default       | Description                                                                                                                        |
 | -------- | -------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `model`  | yes      | —               | Vision-capable model as `provider/model` (e.g. `opencode-go/qwen3.7-plus`). If omitted, routing is disabled (a warning is logged). |
+| `fallbackModels` | no | —            | Ordered fallback vision models (`provider/model`). On a quota / rate-limit failure of the current model (e.g. Bailian's "concurrency allocated quota exceeded"), the vision subagent switches to the next entry and retries immediately. V2 only. |
+| `fallbackResetMs` | no | `1800000`     | How long to stay on a fallback before switching back to the primary, so a recovered quota is picked up. `0` disables the reset. |
 | `agent`  | no       | `vision`        | Name of the injected vision subagent.                                                    |
 | `tmpDir` | no       | `os.tmpdir()`   | Directory under which decoded images are cached (content-hashed, reused across calls).    |
 | `force`  | no       | `false`         | Route images to the vision subagent even when the main model is multimodal (e.g. to use a cheaper vision model). By default the subagent is **skipped** when the main model can already see images. |
@@ -132,6 +134,32 @@ Then restart opencode — plugins are not hot-reloaded.
   ]
 }
 ```
+
+### With quota failover
+
+```jsonc
+{
+  "plugin": [
+    [
+      "/Users/you/Tuning/opencode-multimodal-looker",
+      {
+        "model": "alibaba-coding-plan/qwen3.7-plus",
+        "fallbackModels": [
+          "tencentmaas-openai/custom-model-c4-flash",
+          "tencentmaas/custom-model-a8"
+        ]
+      }
+    ]
+  ]
+}
+```
+
+When the primary vision model fails with a quota / rate-limit error, the
+subagent fails over to the next fallback (switching both the running child
+session and the agent registry, then retrying with no delay) and logs
+`vision model … hit a quota/rate limit; switched vision subagent to …`.
+After `fallbackResetMs` (default 30 minutes) it switches back to the primary;
+if the quota is still exhausted the hook fails over again.
 
 ### Custom subagent name and cache directory
 

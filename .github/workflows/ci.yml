@@ -1,7 +1,7 @@
 name: CI
 
 # Self-maintained plugin: verify tests, types, and that dist/ is committed in sync
-# with src/. Nothing is published to npm.
+# with src/. Releases to npm go through .github/workflows/publish.yml (OIDC).
 on:
   push:
   pull_request:

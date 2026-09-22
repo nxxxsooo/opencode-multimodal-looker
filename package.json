@@ -18,7 +18,8 @@
   },
   "scripts": {
     "test": "bun test",
-    "build": "bun build src/index.ts --outfile dist/index.js --target=node --external @opencode/plugin"
+    "build": "bun build src/index.ts --outfile dist/index.js --target=node --external @opencode/plugin",
+    "prepublishOnly": "bun test && bunx tsc --noEmit && bun run build"
   },
   "dependencies": {
     "@opencode/plugin": "^2.0.3"

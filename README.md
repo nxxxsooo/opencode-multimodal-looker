@@ -19,8 +19,9 @@
 
 > **Origin.** This is a self-maintained rename of
 > [`Chathula/opencode-vision-router`](https://github.com/Chathula/opencode-vision-router)
-> (MIT), taken at upstream `0.2.0`. It is not published to npm and is loaded by
-> directory path. Changes are not sent upstream; see [Divergence](#-divergence-from-upstream).
+> (MIT), taken at upstream `0.2.0`. It is published to npm as
+> `opencode-multimodal-looker` and can also be loaded by directory path.
+> Changes are not sent upstream; see [Divergence](#-divergence-from-upstream).
 
 ---
 
@@ -67,11 +68,25 @@ opencode version supports:
 
 Add it to your `opencode.json(c)` and restart opencode — plugins are not hot-reloaded.
 
-This package is not on npm. Clone it, build it once, and point `plugin` at the
-directory:
+**From npm** (recommended, per current [OpenCode plugin docs](https://opencode.ai/v2/docs/build/plugins)):
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-multimodal-looker",
+      "options": { "model": "alibaba-coding-plan/qwen3.7-plus" }
+    }
+  ]
+}
+```
+
+**From a local directory** (fallback for versions whose config schema only
+accepts the `plugin` key — e.g. opencode `2.0.10`). Clone it, build it once,
+and point a `[path, options]` tuple at the directory:
 
 ```bash
-git clone <this repo> ~/path/to/opencode-multimodal-looker
+git clone https://github.com/nxxxsooo/opencode-multimodal-looker.git ~/path/to/opencode-multimodal-looker
 cd ~/path/to/opencode-multimodal-looker && bun install && bun run build
 ```
 
@@ -88,12 +103,12 @@ cd ~/path/to/opencode-multimodal-looker && bun install && bun run build
 
 Then restart opencode — plugins are not hot-reloaded.
 
-> ⚠️ The config key is `plugin` with a `[path, options]` tuple. Upstream's README
-> documents a `plugins` key with `{ package, options }` objects for OpenCode 2, but
-> the `https://opencode.ai/config.json` schema shipped with opencode `2.0.10` only
-> accepts `plugin`, whose items are `string | [string, object]`. The path must be a
-> **directory** containing `package.json`; pointing at a file is rejected with
-> `configured plugin path must be a directory`.
+> ⚠️ The directory-tuple form uses the `plugin` key with `[path, options]` tuples
+> (not the `plugins` key with `{ package, options }` objects from the npm form
+> above). The `https://opencode.ai/config.json` schema shipped with opencode
+> `2.0.10` only accepts `plugin`, whose items are `string | [string, object]`.
+> The path must be a **directory** containing `package.json`; pointing at a file
+> is rejected with `configured plugin path must be a directory`.
 
 ## ⚙️ Configuration
 
@@ -264,8 +279,9 @@ Taken at `Chathula/opencode-vision-router@0.2.0`. Changes since:
   fails instead of failing silently.
 - **Regression tests for the V2 capability path** (`OpenCode V2 capability detection`),
   which upstream had none of — hence the shipped bug.
-- Renamed to `opencode-multimodal-looker`; `dist/` is tracked because the plugin is
-  loaded by directory path; npm publishing and its release workflow were removed.
+- Renamed to `opencode-multimodal-looker`; `dist/` is tracked so the plugin can
+  also be loaded by directory path. npm publishing was restored at `0.3.0`
+  (Trusted Publishing via `.github/workflows/publish.yml`).
 
 ## 🧰 Maintenance
 
